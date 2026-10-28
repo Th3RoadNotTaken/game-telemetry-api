@@ -1,3 +1,7 @@
+import logging
+import time
+import uuid
+
 from contextlib import asynccontextmanager
 from typing import Annotated
 
@@ -9,6 +13,8 @@ from app.db import engine, get_db
 from app.models import Base, Event
 from app.schemas import EventIn, EventOut, Report, StyleReport, OverallReport
 
+from app.logging_config import setup_logging
+
 LATE_FROM_ATTEMPT = 30
 
 @asynccontextmanager
@@ -16,8 +22,28 @@ async def lifespan(app: FastAPI):
     Base.metadata.create_all(engine)
     yield
 
-
+setup_logging()
+logger = logging.getLogger("app.requests")
 app = FastAPI(title="Game Telemetry API", lifespan=lifespan)
+
+@app.middleware("http")
+async def log_requests(request, call_next):
+    request_id = str(uuid.uuid4())
+    start = time.perf_counter()
+    response = await call_next(request)
+    duration_ms = round((time.perf_counter() - start) * 1000, 1)
+    response.headers["X-Request-ID"] = request_id
+    logger.info(
+        "request",
+        extra={"extra_fields": {
+            "request_id": request_id,
+            "method": request.method,
+            "path": request.url.path,
+            "status": response.status_code,
+            "duration_ms": duration_ms,
+        }},
+    )
+    return response
 
 
 @app.get("/health")
