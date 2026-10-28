@@ -15,6 +15,11 @@ from app.schemas import EventIn, EventOut, Report, StyleReport, OverallReport
 
 from app.logging_config import setup_logging
 
+from fastapi import Response
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+
+from app.metrics import REQUESTS, REQUEST_SECONDS
+
 LATE_FROM_ATTEMPT = 30
 
 @asynccontextmanager
@@ -31,8 +36,13 @@ async def log_requests(request, call_next):
     request_id = str(uuid.uuid4())
     start = time.perf_counter()
     response = await call_next(request)
-    duration_ms = round((time.perf_counter() - start) * 1000, 1)
+    elapsed = time.perf_counter() - start
+    duration_ms = round(elapsed * 1000, 1)
     response.headers["X-Request-ID"] = request_id
+    route = request.scope.get("route")
+    path = route.path if route else "unmatched"
+    REQUESTS.labels(request.method, path, str(response.status_code)).inc()
+    REQUEST_SECONDS.labels(request.method, path).observe(elapsed)
     logger.info(
         "request",
         extra={"extra_fields": {
@@ -45,6 +55,9 @@ async def log_requests(request, call_next):
     )
     return response
 
+@app.get("/metrics")
+def metrics():
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 @app.get("/health")
 def health():
